@@ -401,6 +401,9 @@ def process_images(outpath, func_init, func_sample, prompt, seed, sampler_name, 
 
                         
                     image.save(os.path.join(sample_path, filename))
+
+                    with open(os.path.join(sample_path, "LOG_SEED_PROMPT.txt"), "a") as f:
+                        f.write(f"({seeds[i]}) {prompts[i]}")
                     output_images.append(image)
                     base_count += 1
 
