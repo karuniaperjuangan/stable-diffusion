@@ -14,6 +14,8 @@ import random
 import math
 
 import k_diffusion as K
+from esrgan.realesrgan.utils import RealESRGANer
+from basicsr.archs.rrdbnet_arch import RRDBNet
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
@@ -59,6 +61,16 @@ css_hide_progressbar = """
 .progress-bar { display:none!important; }
 .meta-text { display:none!important; }
 """
+
+upsampler = RealESRGANer(
+    scale=4,
+    model_path="./esrgan/experiments/pretrained_models/RealESRGAN_x4plus_anime_6B.pth",
+    model= RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=6, num_grow_ch=32, scale=4),
+    tile=0,
+    tile_pad=10,
+    pre_pad=0,
+    half=True,
+    gpu_id=None)
 
 def chunk(it, size):
     it = iter(it)
@@ -296,7 +308,7 @@ def check_prompt_length(prompt, comments):
     comments.append(f"Warning: too many input tokens; some ({len(overflowing_words)}) have been truncated:\n{overflowing_text}\n")
 
 
-def process_images(outpath, func_init, func_sample, prompt, seed, sampler_name, batch_size, n_iter, steps, cfg_scale, width, height, prompt_matrix, use_GFPGAN):
+def process_images(outpath, func_init, func_sample, prompt, seed, sampler_name, batch_size, n_iter, steps, cfg_scale, width, height, prompt_matrix, use_GFPGAN, use_ESRGAN):
     """this is the main loop that both txt2img and img2img use; it calls func_init once inside all the scopes and func_sample once per batch"""
 
     assert prompt is not None
@@ -379,11 +391,16 @@ def process_images(outpath, func_init, func_sample, prompt, seed, sampler_name, 
                         cropped_faces, restored_faces, restored_img = GFPGAN.enhance(x_sample, has_aligned=False, only_center_face=False, paste_back=True)
                         x_sample = restored_img
 
+                    if use_ESRGAN:
+                        x_sample, _ = upsampler.enhance(x_sample, outscale=None)
+
                     image = Image.fromarray(x_sample)
+                    
                     filename = f"{base_count:05}-{seeds[i]}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.png"
+                    
 
+                        
                     image.save(os.path.join(sample_path, filename))
-
                     output_images.append(image)
                     base_count += 1
 
@@ -401,7 +418,7 @@ def process_images(outpath, func_init, func_sample, prompt, seed, sampler_name, 
 
                 output_images.insert(0, grid)
 
-            grid.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+            #grid.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
             grid_count += 1
 
     info = f"""
@@ -415,7 +432,7 @@ Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, Seed: {seed}{',
     return output_images, seed, info
 
 
-def txt2img(prompt: str, ddim_steps: int, sampler_name: str, use_GFPGAN: bool, prompt_matrix: bool, ddim_eta: float, n_iter: int, batch_size: int, cfg_scale: float, seed: int, height: int, width: int):
+def txt2img(prompt: str, ddim_steps: int, sampler_name: str, use_GFPGAN: bool, use_ESRGAN:bool, prompt_matrix: bool, ddim_eta: float, n_iter: int, batch_size: int, cfg_scale: float, seed: int, height: int, width: int):
     outpath = opt.outdir or "outputs/txt2img-samples"
 
     if sampler_name == 'PLMS':
@@ -448,7 +465,8 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, use_GFPGAN: bool, p
         width=width,
         height=height,
         prompt_matrix=prompt_matrix,
-        use_GFPGAN=use_GFPGAN
+        use_GFPGAN=use_GFPGAN,
+        use_ESRGAN=use_ESRGAN,
     )
 
     del sampler
@@ -504,6 +522,7 @@ txt2img_interface = gr.Interface(
         gr.Slider(minimum=1, maximum=150, step=1, label="Sampling Steps", value=50),
         gr.Radio(label='Sampling method', choices=["DDIM", "PLMS", "k-diffusion"], value="k-diffusion"),
         gr.Checkbox(label='Fix faces using GFPGAN', value=False, visible=GFPGAN is not None),
+        gr.Checkbox(label='Enhance with Real-ESRGAN', value=True),
         gr.Checkbox(label='Create prompt matrix (separate multiple prompts using |, and get all combinations of them)', value=False),
         gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label="DDIM ETA", value=0.0, visible=False),
         gr.Slider(minimum=1, maximum=16, step=1, label='Batch count (how many batches of images to generate)', value=1),
@@ -524,7 +543,7 @@ txt2img_interface = gr.Interface(
 )
 
 
-def img2img(prompt: str, init_img, ddim_steps: int, use_GFPGAN: bool, prompt_matrix, n_iter: int, batch_size: int, cfg_scale: float, denoising_strength: float, seed: int, height: int, width: int, resize_mode: int):
+def img2img(prompt: str, init_img, ddim_steps: int, use_GFPGAN: bool, use_ESRGAN:bool, prompt_matrix, n_iter: int, batch_size: int, cfg_scale: float, denoising_strength: float, seed: int, height: int, width: int, resize_mode: int):
     outpath = opt.outdir or "outputs/img2img-samples"
 
     sampler = KDiffusionSampler(model)
@@ -572,7 +591,8 @@ def img2img(prompt: str, init_img, ddim_steps: int, use_GFPGAN: bool, prompt_mat
         width=width,
         height=height,
         prompt_matrix=prompt_matrix,
-        use_GFPGAN=use_GFPGAN
+        use_GFPGAN=use_GFPGAN,
+        use_ESRGAN=use_ESRGAN,
     )
 
     del sampler
@@ -590,6 +610,7 @@ img2img_interface = gr.Interface(
         gr.Image(value=sample_img2img, source="upload", interactive=True, type="pil"),
         gr.Slider(minimum=1, maximum=150, step=1, label="Sampling Steps", value=50),
         gr.Checkbox(label='Fix faces using GFPGAN', value=False, visible=GFPGAN is not None),
+        gr.Checkbox(label='Enhance with Real-ESRGAN', value=True),
         gr.Checkbox(label='Create prompt matrix (separate multiple prompts using |, and get all combinations of them)', value=False),
         gr.Slider(minimum=1, maximum=16, step=1, label='Batch count (how many batches of images to generate)', value=1),
         gr.Slider(minimum=1, maximum=8, step=1, label='Batch size (how many images are in a batch; memory-hungry)', value=1),
@@ -641,6 +662,7 @@ if GFPGAN is not None:
         description="Fix faces on images",
         allow_flagging="never",
     ), "GFPGAN"))
+
 
 demo = gr.TabbedInterface(
     interface_list=[x[0] for x in interfaces],
